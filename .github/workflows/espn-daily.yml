@@ -1,0 +1,80 @@
+name: Professorsack ESPN Cloud Export
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * *'
+      timezone: 'America/Toronto'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: professorsack-espn-export
+  cancel-in-progress: false
+
+jobs:
+  export:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      ESPN_S2: ${{ secrets.ESPN_S2 }}
+      ESPN_SWID: ${{ secrets.ESPN_SWID }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install espn-api keyring requests tzdata
+          if (Test-Path 'requirements.txt') {
+            python -m pip install -r requirements.txt
+          }
+
+      - name: Run ESPN exporter
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ESPN_S2) -or [string]::IsNullOrWhiteSpace($env:ESPN_SWID)) {
+            throw 'Missing ESPN_S2 or ESPN_SWID secret; add them under Settings > Secrets and variables > Actions.'
+          }
+          python export_espn.py --league-id 1740867329 --year 2027
+          if ($LASTEXITCODE -ne 0) { throw "ESPN export failed with exit code $LASTEXITCODE" }
+
+      - name: Validate and prepare today's export
+        shell: pwsh
+        run: |
+          python .github/scripts/prepare_export.py
+          if ($LASTEXITCODE -ne 0) { throw 'No fresh matching JSON and TXT files generated' }
+
+      - name: Install rclone
+        shell: pwsh
+        run: choco install rclone --yes --no-progress
+
+      - name: Configure Google Drive
+        shell: pwsh
+        env:
+          RCLONE_CONFIG_TEXT: ${{ secrets.RCLONE_CONFIG_TEXT }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:RCLONE_CONFIG_TEXT)) {
+            throw 'Missing RCLONE_CONFIG_TEXT secret; configure rclone locally then store the full config as a GitHub Actions secret.'
+          }
+          $configPath = Join-Path $env:RUNNER_TEMP 'rclone.conf'
+          [System.IO.File]::WriteAllText($configPath, $env:RCLONE_CONFIG_TEXT)
+          "RCLONE_CONFIG=$configPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload matched files to Google Drive
+        shell: pwsh
+        run: |
+          rclone copyto 'prepared/professorsack_breakout_latest.txt' 'gdrive:Professorsack ESPN Exports/professorsack_breakout_latest.txt' --log-level ERROR
+          if ($LASTEXITCODE -ne 0) { throw 'Breakout report upload failed' }
+          rclone copyto 'prepared/professorsack_latest.json' 'gdrive:Professorsack ESPN Exports/professorsack_latest.json' --log-level ERROR
+          if ($LASTEXITCODE -ne 0) { throw 'JSON upload failed' }
+          Write-Output 'SUCCESS: Export and report uploaded to Google Drive.'
