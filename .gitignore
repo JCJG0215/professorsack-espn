@@ -1,0 +1,15 @@
+# Keep credentials and generated snapshots out of source control
+.env
+.env.*
+*.cookie
+*.cookies
+*rclone*.conf
+rclone.conf
+espn_basketball_snapshot_*.json
+breakout_report_*.txt
+professorsack_latest.json
+professorsack_breakout_latest.txt
+prepared/
+__pycache__/
+*.pyc
+.venv/
