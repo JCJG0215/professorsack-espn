@@ -10,6 +10,8 @@ import argparse
 from datetime import datetime, timedelta, timezone
 import getpass
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -452,9 +454,23 @@ def main():
         league_id = int(input("Your ESPN fantasy league ID: ").strip())
     year = args.year or cfg.get("year", 2027)
     CONFIG.write_text(json.dumps({"league_id": league_id, "year": year}, indent=2), encoding="utf-8")
-    swid = keyring.get_password(APP, "swid")
-    espn_s2 = keyring.get_password(APP, "espn_s2")
-    if args.reset_credentials or not swid or not espn_s2:
+    # In GitHub Actions use encrypted repository secrets as environment variables.
+    # On your own PC, continue using Windows Credential Manager as before.
+    swid = os.environ.get("ESPN_SWID", "").strip()
+    espn_s2 = os.environ.get("ESPN_S2", "").strip()
+    if args.reset_credentials:
+        swid, espn_s2 = "", ""
+    if not swid or not espn_s2:
+        if os.environ.get("GITHUB_ACTIONS", "").lower() == "true":
+            raise SystemExit("GitHub Actions requires both ESPN_SWID and ESPN_S2 repository secrets.")
+        try:
+            swid = swid or keyring.get_password(APP, "swid")
+            espn_s2 = espn_s2 or keyring.get_password(APP, "espn_s2")
+        except Exception:
+            pass  # Missing OS credential backend; allow local interactive setup.
+    if not swid or not espn_s2:
+        if not sys.stdin.isatty():
+            raise SystemExit("No ESPN credentials available; set ESPN_SWID and ESPN_S2 environment variables.")
         print("Enter ESPN session cookies once; stored in Windows Credential Manager, not exported.")
         swid = getpass.getpass("SWID (keep braces): ").strip()
         espn_s2 = getpass.getpass("espn_s2: ").strip()
