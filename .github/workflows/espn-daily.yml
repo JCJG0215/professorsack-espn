@@ -3,8 +3,7 @@ name: Professorsack ESPN Cloud Export
 on:
   workflow_dispatch:
   schedule:
-    - cron: '17 6 * * *'
-      timezone: 'America/Toronto'
+    - cron: '17 10 * * *'
 
 permissions:
   contents: read
