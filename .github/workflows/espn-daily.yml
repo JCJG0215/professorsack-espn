@@ -9,6 +9,9 @@ on:
     # Backup export: 6:13 AM Toronto time, year-round.
     - cron: '13 6 * * *'
       timezone: 'America/Toronto'
+    # TEMPORARY scheduler test for 2026-11-23 at 3:20 PM Toronto. Remove after test.
+    - cron: '20 15 23 11 *'
+      timezone: 'America/Toronto'
 
 permissions:
   contents: read
