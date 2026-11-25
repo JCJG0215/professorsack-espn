@@ -2,6 +2,8 @@ name: Professorsack ESPN Cloud Export
 
 on:
   workflow_dispatch:
+  push:
+    branches: [analytics-engine-v1]
   schedule:
     # Primary export: 5:17 AM Toronto time, year-round.
     - cron: '17 5 * * *'
@@ -18,7 +20,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  analytics-tests:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m compileall -q fantasy_analytics.py
+      - run: python fantasy_analytics.py --self-test
+      - run: python -m unittest test_exporter_offline.py
+
   export:
+    if: github.event_name != 'push'
     runs-on: windows-latest
     timeout-minutes: 25
     env:
@@ -42,6 +58,11 @@ jobs:
           if (Test-Path 'requirements.txt') {
             python -m pip install -r requirements.txt
           }
+
+      - name: Install optional NBA data library
+        continue-on-error: true
+        timeout-minutes: 2
+        run: python -m pip install nba_api
 
       - name: Run ESPN exporter
         shell: pwsh
