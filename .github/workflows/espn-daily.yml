@@ -2,6 +2,8 @@ name: Professorsack ESPN Cloud Export
 
 on:
   workflow_dispatch:
+  push:
+    branches: [analytics-engine-v1]
   schedule:
     # Primary export: 5:17 AM Toronto time, year-round.
     - cron: '17 5 * * *'
@@ -18,7 +20,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  analytics-tests:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m compileall -q fantasy_analytics.py season_analytics.py forecast_history.py
+      - run: python fantasy_analytics.py --self-test
+      - run: python -m unittest -v test_fantasy_analytics.py test_season_history.py
+      - run: python test_exporter_offline.py
+
   export:
+    if: github.event_name != 'push'
     runs-on: windows-latest
     timeout-minutes: 25
     env:
@@ -52,6 +69,11 @@ jobs:
           python export_espn.py --league-id 1740867329 --year 2027
           if ($LASTEXITCODE -ne 0) { throw "ESPN export failed with exit code $LASTEXITCODE" }
 
+      - name: Install optional NBA data library
+        continue-on-error: true
+        timeout-minutes: 2
+        run: python -m pip install nba_api
+
       - name: Validate and prepare today's export
         shell: pwsh
         run: |
@@ -74,6 +96,18 @@ jobs:
           [System.IO.File]::WriteAllText($configPath, $env:RCLONE_CONFIG_TEXT)
           "RCLONE_CONFIG=$configPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Evaluate and prepare forecast history
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $data = Get-Content 'prepared/professorsack_latest.json' -Raw | ConvertFrom-Json
+          $date = [DateTimeOffset]::Parse($data.exported_at)
+          $previous = $date.AddDays(-1).ToString('yyyy-MM-dd')
+          rclone copyto "gdrive:Professorsack ESPN Exports/forecast_history/$previous.json" 'prepared/previous_forecast.json' --log-level ERROR
+          if ($LASTEXITCODE -ne 0) { Write-Output 'Previous forecast unavailable; continuing.' }
+          python forecast_history.py --snapshot prepared/professorsack_latest.json --previous prepared/previous_forecast.json --output prepared/current_forecast.json
+          if ($LASTEXITCODE -ne 0) { throw 'Optional forecast history evaluation failed' }
+
       - name: Upload matched files to Google Drive
         shell: pwsh
         run: |
@@ -82,3 +116,15 @@ jobs:
           rclone copyto 'prepared/professorsack_latest.json' 'gdrive:Professorsack ESPN Exports/professorsack_latest.json' --log-level ERROR
           if ($LASTEXITCODE -ne 0) { throw 'JSON upload failed' }
           Write-Output 'SUCCESS: Export and report uploaded to Google Drive.'
+
+      - name: Archive first forecast of the day
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          if (Test-Path 'prepared/current_forecast.json') {
+            $data = Get-Content 'prepared/current_forecast.json' -Raw | ConvertFrom-Json
+            if ($data.pregame_assumption) {
+              rclone copyto 'prepared/current_forecast.json' "gdrive:Professorsack ESPN Exports/forecast_history/$($data.date).json" --ignore-existing --log-level ERROR
+              if ($LASTEXITCODE -ne 0) { throw 'Optional forecast archive upload failed' }
+            }
+          }

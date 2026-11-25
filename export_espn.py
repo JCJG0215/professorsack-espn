@@ -348,6 +348,8 @@ def build_snapshot(league, league_id, year, now, max_free_agents=1200, page_size
         teams.append({
             "team_id": t.team_id, "team_name": t.team_name,
             "team_abbrev": getattr(t, "team_abbrev", None),
+            "ties": getattr(t, "ties", None),
+            "division_id": getattr(t, "division_id", None),
             "wins": getattr(t, "wins", None), "losses": getattr(t, "losses", None),
             "season_acquisitions": getattr(t, "acquisitions", None),
             "season_drops": getattr(t, "drops", None),
@@ -373,6 +375,18 @@ def build_snapshot(league, league_id, year, now, max_free_agents=1200, page_size
         warnings.append(f"{missing_schedules} free agents have no next-14-day ESPN schedule (could be inactive or incomplete ESPN data)")
     if missing_game_logs:
         warnings.append(f"{missing_game_logs} free-agent entries lack per-game logs; breakout candidates use ONE-GAME season totals where possible. No assumption made for 2+ games.")
+    season_matchups = []
+    try:
+        # Read only the matchup schedule, retain explicitly selected fields.
+        raw_schedule = league.espn_request.league_get(params={"view": "mMatchup"}, headers={}).get("schedule", [])
+        for m in raw_schedule:
+            def side(name):
+                item = m.get(name) or {}
+                return {"team_id": item.get("teamId"), "score": item.get("totalPoints")}
+            season_matchups.append({"period": m.get("matchupPeriodId"), "home": side("home"),
+                                    "away": side("away"), "winner": m.get("winner")})
+    except Exception as exc:
+        warnings.append(f"Season schedule unavailable: {type(exc).__name__}")
     try:
         scorecards = [
             {"home_team": getattr(m.home_team, "team_name", None),
@@ -384,6 +398,10 @@ def build_snapshot(league, league_id, year, now, max_free_agents=1200, page_size
     except Exception as exc:
         warnings.append(f"Matchup scoreboard unavailable: {type(exc).__name__}: {str(exc)[:130]}")
         scorecards = []
+    # Full NBA team calendar when ESPN actually supplies it (may be partial).
+    season_calendar = {abbr: upcoming_schedule(tid, league, now, 210)
+                       for abbr, tid in teamids_by_abbrev.items()
+                       if isinstance(abbr, str) and tid}
     snapshot = {
         "export_format": "professorsack-v2", "exported_at": now.isoformat(),
         "season": year, "league_id": league_id, "team_name_target": "Professorsack",
@@ -393,6 +411,13 @@ def build_snapshot(league, league_id, year, now, max_free_agents=1200, page_size
         "league_settings": {"name": getattr(league.settings, "name", None),
                             "scoring_type": getattr(league.settings, "scoring_type", None),
                             "teams": len(teams),
+                            "regular_season_matchups": getattr(league.settings, "reg_season_count", None),
+                            "playoff_team_count": getattr(league.settings, "playoff_team_count", None),
+                            "playoff_matchup_period_length": getattr(league.settings, "playoff_matchup_period_length", None),
+                            "matchup_periods": safe(getattr(league.settings, "matchup_periods", None)),
+                            "playoff_seed_tie_rule": getattr(league.settings, "playoff_seed_tie_rule", None),
+                            "playoff_tie_rule": getattr(league.settings, "playoff_tie_rule", None),
+                            "matchup_limit_per_scoring_period": getattr(league.settings, "matchup_limit_per_scoring_period", None),
                             "acquisition_limit": getattr(league.settings, "acquisition_limit", None),
                             "matchup_acquisition_limit": getattr(league.settings, "matchup_acquisition_limit", None),
                             "waiver_process_days": safe(getattr(league.settings, "waiver_process_days", None)),
@@ -408,6 +433,10 @@ def build_snapshot(league, league_id, year, now, max_free_agents=1200, page_size
         },
         "teams": teams,
         "matchups": scorecards,
+        "season_matchups": season_matchups,
+        "nba_team_calendar": season_calendar,
+        "scoring_period_dates": safe(period_dates),
+        "final_scoring_period": getattr(league, "finalScoringPeriod", None),
         "current_matchup_box_scores": box_score_summary(league, warnings),
         "recent_league_transactions": recent_league_transactions(league, warnings),
         "free_agents": available,
