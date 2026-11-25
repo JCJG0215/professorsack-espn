@@ -2,6 +2,8 @@
 import json
 import re
 import shutil
+import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -50,6 +52,15 @@ def main():
         f"EXPORT_RUN_ID: {suffix}\nJSON_EXPORTED_AT: {timestamp.isoformat()}\n" + content,
         encoding="utf-8",
     )
+    # Analytics is optional: never block the known-working ESPN export.
+    prepared = OUTPUT / "professorsack_latest.json"
+    try:
+        subprocess.run([sys.executable, str(ROOT / "fantasy_analytics.py"),
+                        str(prepared), "--self-test"], check=True, timeout=150,
+                       env={k: v for k, v in __import__("os").environ.items()
+                            if k not in {"ESPN_S2", "ESPN_SWID", "RCLONE_CONFIG_TEXT", "RCLONE_CONFIG"}})
+    except (subprocess.SubprocessError, OSError) as exc:
+        print(f"Optional analytics unavailable: {type(exc).__name__}; publishing original ESPN export.")
     print(f"Prepared fresh matching export: {suffix}; no credentials printed.")
 
 
