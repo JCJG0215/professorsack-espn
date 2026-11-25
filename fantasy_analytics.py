@@ -184,18 +184,30 @@ def best(dp):
     score,line=max(dp.values(),key=lambda x:(x[0],len(x[1])))
     return {"points":round(score,2),"starts":len(line),"lineup":line}
 
-def add_to_dp(dp,p,day,profiles):
+def insertion_cache(dp):
+    """Precompute the best existing assignment that leaves each slot open."""
     base=best(dp)
+    open_slots=[None]*len(SLOTS)
+    for mask,(score,line) in dp.items():
+        for i in range(len(SLOTS)):
+            if mask&(1<<i): continue
+            old=open_slots[i]
+            if old is None or (score,len(line))>(old[0],len(old[1])):
+                open_slots[i]=(score,line)
+    return base,open_slots
+
+def add_to_dp(cache,p,day,profiles):
+    base,open_slots=cache
     if not available(p) or not scheduled(p,day) or profiles[p["playerId"]]["mean"] is None:
         return base
     value=profiles[p["playerId"]]["mean"]
     score,line=base["points"],base["lineup"]
-    for mask,(v,l) in dp.items():
-        for i in mask_slots(p):
-            if mask&(1<<i): continue
-            if v+value>score+1e-7:
-                score=v+value
-                line=l+[{"id":p["playerId"],"name":p["name"],"slot":SLOTS[i],"fp":value,"status":p["injuryStatus"]}]
+    for i in mask_slots(p):
+        if open_slots[i] is None: continue
+        v,l=open_slots[i]
+        if v+value>score+1e-7 or (abs(v+value-score)<1e-7 and len(l)+1>len(line)):
+            score=v+value
+            line=l+[{"id":p["playerId"],"name":p["name"],"slot":SLOTS[i],"fp":value,"status":p["injuryStatus"]}]
     return {"points":round(score,2),"starts":len(line),"lineup":line}
 
 def simulate(ours,theirs,profiles,scores,seed=1740867329,n=3000):
@@ -226,7 +238,7 @@ def simulate(ours,theirs,profiles,scores,seed=1740867329,n=3000):
             "limits":"Not calibrated. Fixed lineups; independent normal scores; OUT excluded; DTD .65, questionable .5, probable .9 assumed; no opponent adds, return dates, substitutions, or correlated injuries."}
 
 def count_centers(roster):
-    return sum("C" in (p.get("eligibleSlots") or []) for p in roster if p.get("lineupSlot")!="IR")
+    return sum("C" in (p.get("eligibleSlots") or []) for p in roster)
 
 def beam_plan(roster,drop,pool,profiles,week,budget):
     """Bounded beam search on one roster slot. Conditional future availability.
@@ -239,7 +251,7 @@ def beam_plan(roster,drop,pool,profiles,week,budget):
     hold=drop["playerId"]
     daily=[]
     for day in week:
-        dp=assignment(other,day,profiles)
+        dp=insertion_cache(assignment(other,day,profiles))
         vals={pid:add_to_dp(dp,p,day,profiles) for pid,p in opts.items()}
         top=sorted((pid for pid in vals if pid!=hold),key=lambda pid:vals[pid]["points"],reverse=True)[:25]
         daily.append((vals,top))
@@ -284,7 +296,12 @@ def analyze(snapshot, logs, log_status):
     roster=own["roster"]
     owned={p.get("playerId") for t in teams for p in t["roster"]}
     raw={p["playerId"]:p for p in snapshot.get("free_agents",[]) if p.get("playerId") is not None and p["playerId"] not in owned}
-    profiles={p["playerId"]:profile(p,logs,snapshot["season"]) for p in list(raw.values())+[p for t in teams for p in t["roster"]]}
+    all_players=list(raw.values())+[p for t in teams for p in t["roster"]]
+    name_ids=defaultdict(set)
+    for p in all_players:
+        name_ids[norm(p.get("name"))].add(p.get("playerId"))
+    logs={k:v for k,v in logs.items() if len(name_ids[k])==1}
+    profiles={p["playerId"]:profile(p,logs,snapshot["season"]) for p in all_players}
     pool=[p for p in raw.values() if p.get("availability_status")=="FREEAGENT" and available(p) and profiles[p["playerId"]]["mean"] is not None]
     schedule_days={g["local_day"] for p in list(raw.values())+[p for t in teams for p in t["roster"]] for g in p.get("upcoming_games",[]) if g.get("local_day")}
     last_schedule=max(schedule_days,default="")
@@ -334,7 +351,7 @@ def analyze(snapshot, logs, log_status):
     drops=[p for p in roster if p.get("lineupSlot")!="IR" and profiles[p["playerId"]]["mean"] is not None and profiles[p["playerId"]]["mean"]<35]
     for drop in drops:
         rest=[p for p in roster if p["playerId"]!=drop["playerId"]]
-        dps=[assignment(rest,d,profiles) for d in week+nextweek]
+        dps=[insertion_cache(assignment(rest,d,profiles)) for d in week+nextweek]
         nextbase=sum(best(assignment(roster,d,profiles))["points"] for d in nextweek)
         for p in pool:
             if count_centers(rest+[p])>4: continue
@@ -350,8 +367,8 @@ def analyze(snapshot, logs, log_status):
     moves.sort(key=lambda m:m["net_points"],reverse=True)
     ros=sorted(moves,key=lambda m:(m["add_projected_fp"]-m["drop_projected_fp"],m["net_points"]),reverse=True)
     plan=None
-    if drops and schedule_complete:
-        lowest=min(drops,key=lambda p:profiles[p["playerId"]]["mean"])
+    if drops and schedule_complete and assumed_budget>0:
+        lowest=min(drops,key=lambda p:(p.get("injuryStatus") not in ACTIVE,profiles[p["playerId"]]["mean"]))
         plan=beam_plan(roster,lowest,pool,profiles,week,assumed_budget)
     matchup_forecast=None
     if current_score and schedule_complete and include_today:
@@ -392,7 +409,7 @@ def self_test():
     profiles={1:{"mean":30},2:{"mean":25},3:{"mean":100}}
     dp=assignment([a,a,b,c],day,profiles)
     assert best(dp)["points"]==55 and best(dp)["starts"]==2
-    assert add_to_dp(assignment([a],day,profiles),b,day,profiles)["points"]==55
+    assert add_to_dp(insertion_cache(assignment([a],day,profiles)),b,day,profiles)["points"]==55
     assert fp({"PTS":20,"FGM":8,"FGA":15,"FG3M":2},{"PTS":1,"FGM":2,"FGA":-1,"3PM":1})==23
     assert norm("Nikola Jokić")==norm("Nikola Jokic")
     print("Analytics self-tests passed.")
