@@ -31,7 +31,7 @@ jobs:
           python-version: '3.11'
       - run: python -m compileall -q fantasy_analytics.py
       - run: python fantasy_analytics.py --self-test
-      - run: python -m unittest test_exporter_offline.py
+      - run: python test_exporter_offline.py
 
   export:
     if: github.event_name != 'push'
@@ -59,11 +59,6 @@ jobs:
             python -m pip install -r requirements.txt
           }
 
-      - name: Install optional NBA data library
-        continue-on-error: true
-        timeout-minutes: 2
-        run: python -m pip install nba_api
-
       - name: Run ESPN exporter
         shell: pwsh
         run: |
@@ -72,6 +67,11 @@ jobs:
           }
           python export_espn.py --league-id 1740867329 --year 2027
           if ($LASTEXITCODE -ne 0) { throw "ESPN export failed with exit code $LASTEXITCODE" }
+
+      - name: Install optional NBA data library
+        continue-on-error: true
+        timeout-minutes: 2
+        run: python -m pip install nba_api
 
       - name: Validate and prepare today's export
         shell: pwsh
