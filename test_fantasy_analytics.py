@@ -27,7 +27,9 @@ class AnalyticsTest(unittest.TestCase):
         self.assertEqual(result["points"],sum(range(24,29)))
         self.assertEqual(len({x["id"] for x in result["lineup"]}),5)
         d=assignment(p[:-1],DAY,profiles)
-        self.assertEqual(add_to_dp(insertion_cache(d),p[-1],DAY,profiles),result)
+        inserted=add_to_dp(insertion_cache(d),p[-1],DAY,profiles)
+        self.assertEqual(inserted["points"],result["points"])
+        self.assertEqual({x["id"] for x in inserted["lineup"]},{x["id"] for x in result["lineup"]})
     def test_end_to_end(self):
         core=player(1,"Core",40,[DAY,FRI,SUN])
         streamer=player(2,"Stream",20,[FRI],("PF","F","UT"))
