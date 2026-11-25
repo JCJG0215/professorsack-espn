@@ -378,7 +378,7 @@ def analyze(snapshot, logs, log_status):
             changed=[p for p in roster if p["playerId"]!=m["drop_id"]]+[raw[m["add_id"]]]
             changed_days=[best(assignment(changed,d,profiles)) for d in week]
             matchup_forecast["best_single_move_conditional_simulation"]=simulate(changed_days,oppdays,profiles,current_score)
-    return {"version":"1.0","exported_at":snapshot["exported_at"],"nba_data":log_status,
+    result={"version":"1.1","exported_at":snapshot["exported_at"],"nba_data":log_status,
             "coverage":{"deduplicated_unrostered":len(raw),"immediate_healthy_candidates":len(pool),
                         "nba_log_matched":sum(profiles[p]["recent_games"]>0 for p in profiles),
                         "profile_count":len(profiles),"last_schedule_day":last_schedule,
@@ -398,8 +398,16 @@ def analyze(snapshot, logs, log_status):
                            "Before noon Toronto assumed no games started; check tipoff and score before use. Later snapshots omit today; no win simulation.",
                            "Week is Monday-Sunday per user rules, not verified ESPN playoff round.",
                            "Missing schedule is unknown, not evidence of no game; last-date coverage is necessary but not sufficient.",
-                           "No verified playoff bracket, qualification simulation, or calibrated historical backtest yet.",
+                           "Season qualification and walk-forward model results are conditional, not calibrated win probabilities.",
                            "Waiver candidates are watchlist only, not immediate streaming options. Protect high-upside players even if model below 35."]}
+    try:
+        from season_analytics import qualification, playoff_calendar, backtest
+        result["season_qualification"]=qualification(snapshot,result["matchup"])
+        result["playoff_calendar"]=playoff_calendar(snapshot,profiles,assignment,best)
+        result["walk_forward_backtest"]=backtest(all_players,{p["playerId"]:logs.get(norm(p.get("name")),[]) for p in all_players},profile,snapshot["season"])
+    except Exception as exc:
+        result["season_analytics_status"]={"status":"unavailable","error_type":type(exc).__name__}
+    return result
 
 def self_test():
     day="2026-11-25"
